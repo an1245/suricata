@@ -22,7 +22,7 @@ use crate::direction::Direction;
 use crate::encryption::EncryptionHandling;
 use crate::flow::Flow;
 use crate::frames::Frame;
-use nom8::Err;
+use nom7::Err;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use suricata_sys::sys::{
@@ -571,7 +571,7 @@ pub unsafe extern "C" fn SCRegisterSshParser() {
     let ip_proto_str = CString::new("tcp").unwrap();
 
     if SCAppLayerProtoDetectConfProtoDetectionEnabled(ip_proto_str.as_ptr(), parser.name) != 0 {
-        let alproto = applayer_register_protocol_detection(&parser, 1);
+        let alproto = AppLayerRegisterProtocolDetection(&parser, 1);
         ALPROTO_SSH = alproto;
         if SCAppLayerParserConfParserEnabled(ip_proto_str.as_ptr(), parser.name) != 0 {
             let _ = AppLayerRegisterParser(&parser, alproto);
