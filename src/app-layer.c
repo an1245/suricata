@@ -971,6 +971,10 @@ int AppLayerHandleUdp(ThreadVars *tv, AppLayerThreadCtx *tctx, Packet *p, Flow *
             r = AppLayerParserParse(tv, tctx->alp_tctx, f, f->alproto,
                                     flags, p->payload, p->payload_len);
             PACKET_PROFILING_APP_END(tctx);
+            if (f->flags & FLOW_NOPAYLOAD_INSPECTION &&
+                    SCAppLayerParserStateIssetFlag(f->alparser, APP_LAYER_PARSER_BYPASS_READY)) {
+                PacketBypassCallback(p);
+            }
             p->app_update_direction = (uint8_t)UPDATE_DIR_PACKET;
         }
         PACKET_PROFILING_APP_STORE(tctx, p);
@@ -986,6 +990,10 @@ int AppLayerHandleUdp(ThreadVars *tv, AppLayerThreadCtx *tctx, Packet *p, Flow *
         PACKET_PROFILING_APP_START(tctx, f->alproto);
         r = AppLayerParserParse(tv, tctx->alp_tctx, f, f->alproto,
                 flags, p->payload, p->payload_len);
+        if (f->flags & FLOW_NOPAYLOAD_INSPECTION &&
+                SCAppLayerParserStateIssetFlag(f->alparser, APP_LAYER_PARSER_BYPASS_READY)) {
+            PacketBypassCallback(p);
+        }
         PACKET_PROFILING_APP_END(tctx);
         PACKET_PROFILING_APP_STORE(tctx, p);
         p->app_update_direction = (uint8_t)UPDATE_DIR_PACKET;
