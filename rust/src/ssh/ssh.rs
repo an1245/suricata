@@ -19,9 +19,10 @@ use super::parser;
 use crate::applayer::*;
 use crate::core::*;
 use crate::direction::Direction;
+use crate::encryption::EncryptionHandling;
 use crate::flow::Flow;
 use crate::frames::Frame;
-use nom7::Err;
+use nom8::Err;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use suricata_sys::sys::{
@@ -30,26 +31,17 @@ use suricata_sys::sys::{
     SCAppLayerProtoDetectConfProtoDetectionEnabled,
 };
 
-#[repr(C)]
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-#[allow(non_camel_case_types)]
-pub enum SshEncryptionHandling {
-    SSH_HANDLE_ENCRYPTION_TRACK_ONLY = 0, // Disable raw content inspection, continue tracking
-    SSH_HANDLE_ENCRYPTION_BYPASS = 1,     // Skip processing of flow, bypass if possible
-    SSH_HANDLE_ENCRYPTION_FULL = 2,       // Handle fully like any other protocol
-}
-
 static mut ALPROTO_SSH: AppProto = ALPROTO_UNKNOWN;
 static HASSH_ENABLED: AtomicBool = AtomicBool::new(false);
 
-static mut ENCRYPTION_BYPASS_ENABLED: SshEncryptionHandling =
-    SshEncryptionHandling::SSH_HANDLE_ENCRYPTION_TRACK_ONLY;
+static mut ENCRYPTION_BYPASS_ENABLED: EncryptionHandling =
+    EncryptionHandling::ENCRYPTION_HANDLING_TRACK_ONLY;
 
 fn hassh_is_enabled() -> bool {
     HASSH_ENABLED.load(Ordering::Relaxed)
 }
 
-fn encryption_bypass_mode() -> SshEncryptionHandling {
+fn encryption_bypass_mode() -> EncryptionHandling {
     unsafe { ENCRYPTION_BYPASS_ENABLED }
 }
 
@@ -141,7 +133,7 @@ impl SSHState {
 
     fn parse_record(
         &mut self, mut input: &[u8], resp: bool, pstate: *mut AppLayerParserState,
-        flow: *const Flow, stream_slice: &StreamSlice,
+        flow: *mut Flow, stream_slice: &StreamSlice,
     ) -> AppLayerResult {
         let (hdr, ohdr) = if !resp {
             (&mut self.transaction.cli_hdr, &self.transaction.srv_hdr)
@@ -227,12 +219,12 @@ impl SSHState {
                                 let mut flags = 0;
 
                                 match encryption_bypass_mode() {
-                                    SshEncryptionHandling::SSH_HANDLE_ENCRYPTION_BYPASS => {
+                                    EncryptionHandling::ENCRYPTION_HANDLING_BYPASS => {
                                         flags |= APP_LAYER_PARSER_NO_INSPECTION
                                             | APP_LAYER_PARSER_NO_REASSEMBLY
                                             | APP_LAYER_PARSER_BYPASS_READY;
                                     }
-                                    SshEncryptionHandling::SSH_HANDLE_ENCRYPTION_TRACK_ONLY => {
+                                    EncryptionHandling::ENCRYPTION_HANDLING_TRACK_ONLY => {
                                         flags |= APP_LAYER_PARSER_NO_INSPECTION;
                                     }
                                     _ => {}
@@ -289,21 +281,15 @@ impl SSHState {
                                 }
                                 parser::MessageCode::Kexinit if hassh_is_enabled() => {
                                     // check if buffer is bigger than maximum reassembled packet size
-                                    let body_len = head.pkt_len - 2;
-                                    if body_len < SSH_MAX_REASSEMBLED_RECORD_LEN as u32 {
-                                        // returning incomplete means the body bytes in rem are
-                                        // not consumed and will be delivered again, so the whole
-                                        // body has to be skipped on the next call
-                                        hdr.record_left = body_len;
+                                    hdr.record_left = head.pkt_len - 2;
+                                    if hdr.record_left < SSH_MAX_REASSEMBLED_RECORD_LEN as u32 {
                                         // saving type of incomplete kex message
                                         hdr.record_left_msg = parser::MessageCode::Kexinit;
                                         return AppLayerResult::incomplete(
                                             (il - rem.len()) as u32,
-                                            body_len,
+                                            head.pkt_len - 2,
                                         );
                                     } else {
-                                        // returning ok consumes the body bytes in rem, so keep
-                                        // record_left = body_len - remlen computed above
                                         SCLogDebug!("SSH buffer is bigger than maximum reassembled packet size");
                                         self.set_event(SSHEvent::LongKexRecord);
                                     }
@@ -585,7 +571,7 @@ pub unsafe extern "C" fn SCRegisterSshParser() {
     let ip_proto_str = CString::new("tcp").unwrap();
 
     if SCAppLayerProtoDetectConfProtoDetectionEnabled(ip_proto_str.as_ptr(), parser.name) != 0 {
-        let alproto = AppLayerRegisterProtocolDetection(&parser, 1);
+        let alproto = applayer_register_protocol_detection(&parser, 1);
         ALPROTO_SSH = alproto;
         if SCAppLayerParserConfParserEnabled(ip_proto_str.as_ptr(), parser.name) != 0 {
             let _ = AppLayerRegisterParser(&parser, alproto);
@@ -608,7 +594,7 @@ pub extern "C" fn SCSshHasshIsEnabled() -> bool {
 }
 
 #[no_mangle]
-pub extern "C" fn SCSshEnableBypass(mode: SshEncryptionHandling) {
+pub extern "C" fn SCSshEnableBypass(mode: EncryptionHandling) {
     unsafe {
         ENCRYPTION_BYPASS_ENABLED = mode;
     }
